@@ -1,0 +1,29 @@
+{
+  "total_entities": 45,
+  "shape_distribution": {
+    "hexagon": 15,
+    "pentagon": 10,
+    "square": 9,
+    "triangle": 3,
+    "circle": 8
+  },
+  "pattern_distribution": {
+    "gradient": 20,
+    "striped": 7,
+    "dotted": 10,
+    "solid": 5,
+    "outline": 3
+  },
+  "literacy_statistics": {
+    "mean": 71.41607133333333,
+    "median": 78.0,
+    "std": 28.05141821261137,
+    "min": 3.0,
+    "max": 99.825
+  },
+  "complexity_distribution": {
+    "high_complexity": 27,
+    "medium_complexity": 10,
+    "low_complexity": 8
+  }
+}
