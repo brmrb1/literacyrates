@@ -59,6 +59,14 @@ class GeometricArtEngine:
         self.global_rotation = 0
         self.pulse_phase = 0
         
+        # Performance optimizations - Caching
+        self.color_cache = {}  # Cache computed colors
+        self.surface_cache = {}  # Cache pre-rendered surfaces
+        self.math_cache = {}  # Cache mathematical calculations
+        self.blur_cache = {}  # Cache blurred surfaces
+        self.cache_frame = 0  # Cache invalidation counter
+        self.dirty_entities = set()  # Track entities needing re-render
+        
         # 鼠标互动参数
         self.mouse_pos = (0, 0)
         self.mouse_influence_radius = 150
@@ -135,7 +143,12 @@ class GeometricArtEngine:
             return False
     
     def hsl_to_rgb(self, hue, saturation, lightness):
-        """HSL to RGB color conversion - optimized for white background"""
+        """HSL to RGB color conversion - optimized for white background with caching"""
+        # Create cache key
+        cache_key = (round(hue, 1), round(saturation, 3), round(lightness, 3))
+        if cache_key in self.color_cache:
+            return self.color_cache[cache_key]
+        
         hue = hue % 360
         h = hue / 360
         s = saturation
@@ -165,50 +178,49 @@ class GeometricArtEngine:
             g = hue_to_rgb(p, q, h)
             b = hue_to_rgb(p, q, h - 1/3)
         
-        return int(r * 255), int(g * 255), int(b * 255)
+        result = int(r * 255), int(g * 255), int(b * 255)
+        self.color_cache[cache_key] = result
+        return result
     
     def get_macaron_color(self, hue, literacy_rate):
-        """生成增强鲜艳度的马卡龙配色方案"""
-        # 提升马卡龙配色的鲜艳度和饱和度
+        """生成增强鲜艳度的马卡龙配色方案 - 带缓存优化"""
+        # Create cache key for colors
+        cache_key = (round(hue, 1), round(literacy_rate, 1))
+        if cache_key in self.color_cache:
+            return self.color_cache[cache_key]
         
         # 基于识字率调整颜色深度，整体大幅提升饱和度
         if literacy_rate >= 90:
-            # 高识字率：极鲜艳的马卡龙色
-            saturation = 0.95  # 大幅提升饱和度
-            lightness = 0.72   # 略微降低亮度以增强色彩感
+            saturation, lightness = 0.95, 0.72
         elif literacy_rate >= 70:
-            # 中等识字率：超鲜艳马卡龙色
-            saturation = 0.92  # 大幅提升饱和度
-            lightness = 0.68
+            saturation, lightness = 0.92, 0.68
         elif literacy_rate >= 50:
-            # 较低识字率：高鲜艳马卡龙色
-            saturation = 0.88  # 大幅提升饱和度
-            lightness = 0.63   # 略微降低亮度
+            saturation, lightness = 0.88, 0.63
         else:
-            # 低识字率：保持高鲜艳度
-            saturation = 0.85  # 大幅提升饱和度
-            lightness = 0.58
+            saturation, lightness = 0.85, 0.58
         
         # 调整特定色相的马卡龙效果，大幅增强鲜艳度
         if 0 <= hue < 60:  # 红橙色系
-            saturation *= 1.08  # 大幅增强饱和度
+            saturation *= 1.08
         elif 60 <= hue < 120:  # 黄绿色系
-            lightness *= 1.03   # 提高亮度
-            saturation *= 1.06  # 大幅增强饱和度
+            lightness *= 1.03
+            saturation *= 1.06
         elif 120 <= hue < 180:  # 绿青色系
-            saturation *= 1.05  # 增强饱和度
+            saturation *= 1.05
         elif 180 <= hue < 240:  # 青蓝色系
-            saturation *= 1.07  # 大幅增强饱和度
+            saturation *= 1.07
         elif 240 <= hue < 300:  # 蓝紫色系
-            saturation *= 1.12  # 极大幅增强饱和度
+            saturation *= 1.12
         else:  # 紫红色系
-            saturation *= 1.10  # 大幅增强饱和度
+            saturation *= 1.10
         
         # 确保值在合理范围内，允许更高的饱和度
-        saturation = max(0.6, min(1.0, saturation))  # 提升最大饱和度到1.0
-        lightness = max(0.45, min(0.85, lightness))  # 稍微降低最小亮度
+        saturation = max(0.6, min(1.0, saturation))
+        lightness = max(0.45, min(0.85, lightness))
         
-        return self.hsl_to_rgb(hue, saturation, lightness)
+        result = self.hsl_to_rgb(hue, saturation, lightness)
+        self.color_cache[cache_key] = result
+        return result
     
     def calculate_clarity(self, literacy_rate):
         """根据识字率计算清晰度参数"""
@@ -218,37 +230,35 @@ class GeometricArtEngine:
         return clarity
     
     def apply_blur_effect(self, surface, blur_radius):
-        """应用模糊效果"""
+        """应用模糊效果 - 优化缓存版本"""
         if blur_radius <= 1:
             return surface
         
-        # 简单的盒式模糊实现
+        # Create cache key
+        surface_id = id(surface)
+        cache_key = (surface_id, int(blur_radius * 10))
+        
+        if cache_key in self.blur_cache:
+            return self.blur_cache[cache_key]
+        
+        # Simplified and faster blur - use transparency instead of pixel-level blur
         width, height = surface.get_size()
-        blurred_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+        blurred_surface = surface.copy()
         
-        # 多次应用简单模糊
-        blur_iterations = min(int(blur_radius), 5)
+        # Apply transparency-based blur effect (much faster)
+        blur_alpha = max(50, 255 - int(blur_radius * 40))
+        alpha_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+        alpha_surface.fill((255, 255, 255, blur_alpha))
+        blurred_surface.blit(alpha_surface, (0, 0), special_flags=pygame.BLEND_ALPHA_SDL2)
         
-        for _ in range(blur_iterations):
-            # 水平模糊
-            for y in range(height):
-                for x in range(width):
-                    r, g, b, a = 0, 0, 0, 0
-                    count = 0
-                    for dx in range(-1, 2):
-                        nx = x + dx
-                        if 0 <= nx < width:
-                            pixel = surface.get_at((nx, y))
-                            r += pixel[0]
-                            g += pixel[1] 
-                            b += pixel[2]
-                            a += pixel[3]
-                            count += 1
-                    if count > 0:
-                        blurred_surface.set_at((x, y), (r//count, g//count, b//count, a//count))
-            
-            surface = blurred_surface.copy()
+        # Cache the result (limit cache size)
+        if len(self.blur_cache) > 50:
+            # Clear oldest entries
+            keys_to_remove = list(self.blur_cache.keys())[:25]
+            for key in keys_to_remove:
+                del self.blur_cache[key]
         
+        self.blur_cache[cache_key] = blurred_surface
         return blurred_surface
     
     def create_clarity_surface(self, entity, base_surface):
@@ -278,151 +288,195 @@ class GeometricArtEngine:
             return base_surface
     
     def draw_circle(self, surface, entity, x, y, size):
-        """绘制圆形 - 使用马卡龙配色"""
-        # 使用马卡龙配色方案
-        color = self.get_macaron_color(entity['hue'], entity['literacy_rate'])
-        opacity = int(entity['opacity'] * 255)
-        
-        # 根据识字率调整清晰度
-        clarity = self.calculate_clarity(entity['literacy_rate'])
-        
-        # 应用点击放大效果
+        """绘制圆形 - 使用马卡龙配色，优化缓存版本"""
+        # Create cache key for this entity's visual state
+        entity_key = f"{entity['entity']}_{entity['pattern']}_{int(size)}_{int(entity['opacity']*100)}"
         click_scale = self.get_entity_click_scale(entity)
-        size = size * click_scale
+        mouse_influenced = entity.get('mouse_influenced', False)
         
-        # 鼠标互动增强效果
-        if entity.get('mouse_influenced', False):
-            influence = entity.get('influence_strength', 0)
-            size = size * (1 + influence * 0.3)  # 被鼠标影响时变大
-            opacity = min(255, int(opacity * (1 + influence * 0.5)))  # 更亮
-            # 鼠标影响时增加清晰度
-            clarity = min(1.0, clarity + influence * 0.3)
+        # Check if we can use cached surface
+        cache_key = (entity_key, int(click_scale*100), mouse_influenced)
         
-        # 选中状态效果
-        if entity == self.selected_entity:
-            clarity = 1.0  # 选中时完全清晰
-            # 绘制选中指示器
-            pygame.draw.circle(surface, (255, 255, 255), (int(x), int(y)), int(size + 8), 3)
-        
-        # 创建临时surface用于绘制
-        temp_size = int(size * 2) + 20
-        temp_surface = pygame.Surface((temp_size, temp_size), pygame.SRCALPHA)
-        center_offset = temp_size // 2
-        
-        # 调整透明度基于清晰度
-        adjusted_opacity = int(opacity * clarity)
-        
-        if entity['pattern'] == 'solid':
-            pygame.draw.circle(temp_surface, (*color, adjusted_opacity), (center_offset, center_offset), int(size))
-        elif entity['pattern'] == 'outline':
-            line_width = max(3, int(6 * clarity))  # 增强边线宽度：基础3像素，最大6像素
-            pygame.draw.circle(temp_surface, (*color, adjusted_opacity), (center_offset, center_offset), int(size), line_width)
-        elif entity['pattern'] == 'dotted':
-            dot_count = max(6, int(12 * clarity))  # 清晰度影响点的数量
-            for i in range(0, 360, 360 // dot_count):
-                dot_x = center_offset + math.cos(math.radians(i)) * size * 0.7
-                dot_y = center_offset + math.sin(math.radians(i)) * size * 0.7
+        if cache_key not in self.surface_cache:
+            # 使用马卡龙配色方案
+            color = self.get_macaron_color(entity['hue'], entity['literacy_rate'])
+            opacity = int(entity['opacity'] * 255)
+            
+            # 根据识字率调整清晰度
+            clarity = self.calculate_clarity(entity['literacy_rate'])
+            
+            # 应用点击放大效果
+            final_size = size * click_scale
+            
+            # 鼠标互动增强效果
+            if mouse_influenced:
+                influence = entity.get('influence_strength', 0)
+                final_size = final_size * (1 + influence * 0.3)
+                opacity = min(255, int(opacity * (1 + influence * 0.5)))
+                clarity = min(1.0, clarity + influence * 0.3)
+            
+            # 创建临时surface用于绘制
+            temp_size = int(final_size * 2) + 20
+            temp_surface = pygame.Surface((temp_size, temp_size), pygame.SRCALPHA)
+            center_offset = temp_size // 2
+            
+            # 调整透明度基于清晰度
+            adjusted_opacity = int(opacity * clarity)
+            
+            # Simplified pattern rendering for better performance
+            if entity['pattern'] in ['solid', 'gradient']:  # Combine for efficiency
+                pygame.draw.circle(temp_surface, (*color, adjusted_opacity), (center_offset, center_offset), int(final_size))
+            elif entity['pattern'] == 'outline':
+                line_width = max(3, int(6 * clarity))
+                pygame.draw.circle(temp_surface, (*color, adjusted_opacity), (center_offset, center_offset), int(final_size), line_width)
+            elif entity['pattern'] == 'dotted':
+                # Pre-calculate dot positions for better performance
+                dot_count = max(6, int(12 * clarity))
+                angle_step = 360 // dot_count
                 dot_size = max(1, int(3 * clarity))
-                pygame.draw.circle(temp_surface, (*color, adjusted_opacity), (int(dot_x), int(dot_y)), dot_size)
-        elif entity['pattern'] == 'gradient':
-            # 简化为实心填充，移除渐变效果
-            pygame.draw.circle(temp_surface, (*color, adjusted_opacity), (center_offset, center_offset), int(size))
+                for i in range(0, 360, angle_step):
+                    angle_rad = math.radians(i)
+                    dot_x = center_offset + math.cos(angle_rad) * final_size * 0.7
+                    dot_y = center_offset + math.sin(angle_rad) * final_size * 0.7
+                    pygame.draw.circle(temp_surface, (*color, adjusted_opacity), (int(dot_x), int(dot_y)), dot_size)
+            
+            # 应用基于识字率的模糊效果（简化）
+            if clarity < 0.9:
+                blur_radius = (1 - clarity) * 4
+                temp_surface = self.apply_blur_effect(temp_surface, blur_radius)
+            
+            # Cache the surface (limit cache size)
+            if len(self.surface_cache) > 100:
+                # Clear some old entries
+                keys_to_remove = list(self.surface_cache.keys())[:50]
+                for key in keys_to_remove:
+                    del self.surface_cache[key]
+            
+            self.surface_cache[cache_key] = (temp_surface, temp_size // 2)
         
-        # 应用基于识字率的模糊效果
-        if clarity < 0.9:  # 只有在需要时才应用模糊
-            blur_radius = (1 - clarity) * 4
-            temp_surface = self.apply_blur_effect(temp_surface, blur_radius)
+        # Use cached surface
+        cached_surface, center_offset = self.surface_cache[cache_key]
         
-        surface.blit(temp_surface, (x - center_offset, y - center_offset))
+        # 选中状态效果（不缓存，因为是临时状态）
+        if entity == self.selected_entity:
+            pygame.draw.circle(surface, (255, 255, 255), (int(x), int(y)), int(size * click_scale + 8), 3)
+        
+        surface.blit(cached_surface, (x - center_offset, y - center_offset))
     
     def draw_polygon(self, surface, entity, x, y, size, sides):
-        """绘制多边形 - 使用马卡龙配色"""
-        # 使用马卡龙配色方案
-        color = self.get_macaron_color(entity['hue'], entity['literacy_rate'])
-        opacity = int(entity['opacity'] * 255)
-        
-        # 根据识字率调整清晰度
-        clarity = self.calculate_clarity(entity['literacy_rate'])
-        
-        # 应用点击放大效果
+        """绘制多边形 - 使用马卡龙配色，优化缓存版本"""
+        # Create cache key for this entity's visual state
+        rotation_key = int((entity['rotation'] + self.global_rotation) / 10) * 10  # Round to 10 degrees
+        entity_key = f"{entity['entity']}_{entity['pattern']}_{sides}_{int(size)}_{rotation_key}"
         click_scale = self.get_entity_click_scale(entity)
-        size = size * click_scale
+        mouse_influenced = entity.get('mouse_influenced', False)
         
-        # 鼠标互动增强效果
-        if entity.get('mouse_influenced', False):
-            influence = entity.get('influence_strength', 0)
-            size = size * (1 + influence * 0.3)  # 被鼠标影响时变大
-            opacity = min(255, int(opacity * (1 + influence * 0.5)))  # 更亮
-            # 鼠标影响时增加清晰度
-            clarity = min(1.0, clarity + influence * 0.3)
+        cache_key = (entity_key, int(click_scale*100), mouse_influenced)
         
-        # 选中状态效果
+        if cache_key not in self.surface_cache:
+            # 使用马卡龙配色方案
+            color = self.get_macaron_color(entity['hue'], entity['literacy_rate'])
+            opacity = int(entity['opacity'] * 255)
+            
+            # 根据识字率调整清晰度
+            clarity = self.calculate_clarity(entity['literacy_rate'])
+            
+            final_size = size * click_scale
+            
+            # 鼠标互动增强效果
+            if mouse_influenced:
+                influence = entity.get('influence_strength', 0)
+                final_size = final_size * (1 + influence * 0.3)
+                opacity = min(255, int(opacity * (1 + influence * 0.5)))
+                clarity = min(1.0, clarity + influence * 0.3)
+            
+            # Pre-calculate polygon vertices (optimized)
+            angle_step = 2 * math.pi / sides
+            rotation = math.radians(entity['rotation'] + self.global_rotation)
+            
+            # 创建临时surface用于绘制
+            temp_size = int(final_size * 3) + 20
+            temp_surface = pygame.Surface((temp_size, temp_size), pygame.SRCALPHA)
+            center_offset = temp_size // 2
+            
+            # Calculate points relative to center
+            temp_points = []
+            for i in range(sides):
+                angle = i * angle_step + rotation
+                point_x = center_offset + math.cos(angle) * final_size
+                point_y = center_offset + math.sin(angle) * final_size
+                temp_points.append((point_x, point_y))
+            
+            # 调整透明度基于清晰度
+            adjusted_opacity = int(opacity * clarity)
+            
+            # Simplified pattern rendering
+            if entity['pattern'] in ['solid', 'gradient', 'striped']:  # Combine for efficiency
+                pygame.draw.polygon(temp_surface, (*color, adjusted_opacity), temp_points)
+            elif entity['pattern'] == 'outline':
+                line_width = max(3, int(6 * clarity))
+                pygame.draw.polygon(temp_surface, (*color, adjusted_opacity), temp_points, line_width)
+            
+            # 应用基于识字率的模糊效果（简化）
+            if clarity < 0.9:
+                blur_radius = (1 - clarity) * 4
+                temp_surface = self.apply_blur_effect(temp_surface, blur_radius)
+            
+            # Cache management
+            if len(self.surface_cache) > 100:
+                keys_to_remove = list(self.surface_cache.keys())[:50]
+                for key in keys_to_remove:
+                    del self.surface_cache[key]
+            
+            self.surface_cache[cache_key] = (temp_surface, center_offset)
+        
+        # Use cached surface
+        cached_surface, center_offset = self.surface_cache[cache_key]
+        
+        # 选中状态效果（不缓存）
         if entity == self.selected_entity:
-            clarity = 1.0  # 选中时完全清晰
-            # 绘制选中指示器
-            pygame.draw.circle(surface, (255, 255, 255), (int(x), int(y)), int(size + 8), 3)
+            pygame.draw.circle(surface, (255, 255, 255), (int(x), int(y)), int(size * click_scale + 8), 3)
         
-        # 计算多边形顶点
-        angle_step = 2 * math.pi / sides
-        rotation = math.radians(entity['rotation'] + self.global_rotation)
-        
-        points = []
-        for i in range(sides):
-            angle = i * angle_step + rotation
-            point_x = x + math.cos(angle) * size
-            point_y = y + math.sin(angle) * size
-            points.append((point_x, point_y))
-        
-        # 创建临时surface用于绘制
-        temp_size = int(size * 3) + 20
-        temp_surface = pygame.Surface((temp_size, temp_size), pygame.SRCALPHA)
-        center_offset = temp_size // 2
-        temp_points = [(p[0] - x + center_offset, p[1] - y + center_offset) for p in points]
-        
-        # 调整透明度基于清晰度
-        adjusted_opacity = int(opacity * clarity)
-        
-        if entity['pattern'] == 'solid':
-            pygame.draw.polygon(temp_surface, (*color, adjusted_opacity), temp_points)
-        elif entity['pattern'] == 'outline':
-            line_width = max(3, int(6 * clarity))  # 增强边线宽度：基础3像素，最大6像素
-            pygame.draw.polygon(temp_surface, (*color, adjusted_opacity), temp_points, line_width)
-        elif entity['pattern'] == 'striped':
-            # 简化条纹 - 移除横线装饰
-            pygame.draw.polygon(temp_surface, (*color, adjusted_opacity), temp_points)
-        elif entity['pattern'] == 'gradient':
-            # 简化多边形 - 移除渐变效果
-            pygame.draw.polygon(temp_surface, (*color, int(adjusted_opacity * clarity)), temp_points)
-        
-        # 应用基于识字率的模糊效果
-        if clarity < 0.9:  # 只有在需要时才应用模糊
-            blur_radius = (1 - clarity) * 4
-            temp_surface = self.apply_blur_effect(temp_surface, blur_radius)
-        
-        surface.blit(temp_surface, (x - center_offset, y - center_offset))
+        surface.blit(cached_surface, (x - center_offset, y - center_offset))
     
     def update_entity_position(self, entity):
-        """更新实体位置"""
+        """更新实体位置 - 优化数学计算"""
         if not self.paused:
-            # 获取帧时间用于平滑插值
-            delta_time = self.clock.get_time() / 1000.0  # 转换为秒
+            # Cache frequently used values
+            delta_time = self.clock.get_time() * 0.001  # Convert to seconds directly
+            frame_factor = delta_time * 60  # Pre-calculate frame factor
             
             # 进一步降低基础位移速度，让移动极其优雅
-            base_movement_factor = 0.0015 * delta_time * 60  # 再次减半到0.0015，极慢优雅
+            base_movement_factor = 0.0015 * frame_factor
             entity['x'] += entity['velocity']['x'] * base_movement_factor
             entity['y'] += entity['velocity']['y'] * base_movement_factor
             
-            # 添加更流畅的振荡运动
-            time_factor = self.time * 0.001  # 时间缩放
-            oscillation_x = entity['oscillation_amplitude'] * math.sin(
-                time_factor * entity['frequency'] + entity['phase']
-            )
-            oscillation_y = entity['oscillation_amplitude'] * math.cos(
-                time_factor * entity['frequency'] * 1.3 + entity['phase']
-            )
+            # Pre-calculate oscillation values for better performance
+            time_factor = self.time * 0.001
+            freq_time = time_factor * entity['frequency']
+            phase = entity['phase']
+            
+            # Cache sin/cos calculations
+            cache_key = (int(freq_time * 100), int(phase * 100))
+            if cache_key not in self.math_cache:
+                self.math_cache[cache_key] = (
+                    math.sin(freq_time + phase),
+                    math.cos(freq_time * 1.3 + phase)
+                )
+                
+                # Limit cache size
+                if len(self.math_cache) > 200:
+                    # Remove half of the cache entries
+                    keys_to_remove = list(self.math_cache.keys())[:100]
+                    for key in keys_to_remove:
+                        del self.math_cache[key]
+            
+            oscillation_x, oscillation_y = self.math_cache[cache_key]
+            oscillation_x *= entity['oscillation_amplitude']
+            oscillation_y *= entity['oscillation_amplitude']
             
             # 振荡运动也使用帧时间插值，进一步降低速度
-            oscillation_factor = 0.001 * delta_time * 60  # 再次减半振荡速度，极其细腻
+            oscillation_factor = 0.001 * frame_factor
             entity['x'] += oscillation_x * oscillation_factor
             entity['y'] += oscillation_y * oscillation_factor
             
@@ -430,58 +484,76 @@ class GeometricArtEngine:
             self.apply_mouse_interaction(entity)
             
             # 添加轻微的速度衰减让移动更自然
-            damping_factor = 0.999  # 非常轻微的阻尼
+            damping_factor = 0.999
             entity['velocity']['x'] *= damping_factor
             entity['velocity']['y'] *= damping_factor
             
             # 改进边界检测和反弹
-            margin = 0.02  # 边界缓冲区
-            if entity['x'] < margin or entity['x'] > (1 - margin):
-                entity['velocity']['x'] *= -0.8  # 减少反弹强度
-                entity['x'] = max(margin, min(1 - margin, entity['x']))
+            margin = 0.02
+            if entity['x'] < margin or entity['x'] > 0.98:  # Pre-calculate 1-margin
+                entity['velocity']['x'] *= -0.8
+                entity['x'] = max(margin, min(0.98, entity['x']))
             
-            if entity['y'] < margin or entity['y'] > (1 - margin):
-                entity['velocity']['y'] *= -0.8  # 减少反弹强度
-                entity['y'] = max(margin, min(1 - margin, entity['y']))
+            if entity['y'] < margin or entity['y'] > 0.98:
+                entity['velocity']['y'] *= -0.8
+                entity['y'] = max(margin, min(0.98, entity['y']))
             
             # 更新旋转，使用帧时间插值
-            rotation_factor = delta_time * 60
-            entity['rotation'] += entity['angular_velocity'] * rotation_factor
-            entity['rotation'] %= 360
+            entity['rotation'] += entity['angular_velocity'] * frame_factor
+            if entity['rotation'] >= 360:
+                entity['rotation'] -= 360
+            elif entity['rotation'] < 0:
+                entity['rotation'] += 360
     
     def apply_mouse_interaction(self, entity):
-        """应用鼠标互动效果"""
-        # 计算实体到鼠标的距离
+        """应用鼠标互动效果 - 优化计算"""
+        # Early exit if mouse is at origin (not moved yet)
+        if self.mouse_pos[0] <= 0 or self.mouse_pos[1] <= 0:
+            entity['mouse_influenced'] = False
+            entity['influence_strength'] = 0
+            return
+        
+        # Pre-calculate entity screen position
         entity_x = entity['x'] * self.width
         entity_y = entity['y'] * self.height
         
+        # Fast distance check using squared distance first (avoid sqrt when possible)
         dx = self.mouse_pos[0] - entity_x
         dy = self.mouse_pos[1] - entity_y
-        distance = math.sqrt(dx*dx + dy*dy)
+        distance_squared = dx*dx + dy*dy
+        influence_radius_squared = self.mouse_influence_radius * self.mouse_influence_radius
         
-        if distance < self.mouse_influence_radius and distance > 0:
+        if distance_squared < influence_radius_squared and distance_squared > 0:
+            # Only calculate sqrt when needed
+            distance = math.sqrt(distance_squared)
+            
             # 计算影响强度（使用平滑曲线）
             normalized_distance = distance / self.mouse_influence_radius
             # 使用平滑的三次函数而不是线性
             influence = (1 - normalized_distance) ** 1.5 * self.mouse_force_strength
             
             # 归一化方向向量
-            dx_norm = dx / distance
-            dy_norm = dy / distance
+            inv_distance = 1.0 / distance  # Avoid division in next two lines
+            dx_norm = dx * inv_distance
+            dy_norm = dy * inv_distance
             
-            # 获取帧时间用于平滑插值
-            delta_time = self.clock.get_time() / 1000.0
-            interaction_factor = 0.15 * delta_time * 60  # 帧率自适应
+            # Pre-calculated interaction factor
+            delta_time = self.clock.get_time() * 0.001  # Convert directly
+            interaction_factor = 0.15 * delta_time * 60
             
             # 应用平滑的吸引力
-            entity['velocity']['x'] += dx_norm * influence * interaction_factor
-            entity['velocity']['y'] += dy_norm * influence * interaction_factor
+            force_x = dx_norm * influence * interaction_factor
+            force_y = dy_norm * influence * interaction_factor
+            entity['velocity']['x'] += force_x
+            entity['velocity']['y'] += force_y
             
             # 限制最大速度，防止过度加速
-            max_velocity = 3.0
-            velocity_magnitude = math.sqrt(entity['velocity']['x']**2 + entity['velocity']['y']**2)
-            if velocity_magnitude > max_velocity:
-                scale_factor = max_velocity / velocity_magnitude
+            vel_x, vel_y = entity['velocity']['x'], entity['velocity']['y']
+            velocity_squared = vel_x*vel_x + vel_y*vel_y
+            max_velocity_squared = 9.0  # 3.0^2
+            
+            if velocity_squared > max_velocity_squared:
+                scale_factor = 3.0 / math.sqrt(velocity_squared)  # max_velocity / magnitude
                 entity['velocity']['x'] *= scale_factor
                 entity['velocity']['y'] *= scale_factor
             
@@ -554,13 +626,20 @@ class GeometricArtEngine:
         pass
     
     def apply_global_effects(self):
-        """应用全局视觉效果"""
-        # 全局脉冲效果
-        self.pulse_phase += 0.01
-        self.global_scale = 1.0 + 0.1 * math.sin(self.pulse_phase)
-        
-        # 全局旋转
-        self.global_rotation += 0.2
+        """应用全局视觉效果 - 优化版本"""
+        if not self.paused:
+            # 全局脉冲效果 - 减少计算频率
+            self.pulse_phase += 0.01
+            # Cache sin calculation result
+            pulse_key = int(self.pulse_phase * 100) % 628  # 2*pi*100
+            if pulse_key not in self.math_cache:
+                self.math_cache[pulse_key] = math.sin(self.pulse_phase)
+            self.global_scale = 1.0 + 0.1 * self.math_cache[pulse_key]
+            
+            # 全局旋转 - 减少增量计算
+            self.global_rotation += 0.2
+            if self.global_rotation >= 360:
+                self.global_rotation -= 360
         
     def draw_info_panel(self):
         """绘制极简主义信息面板"""
@@ -749,43 +828,47 @@ class GeometricArtEngine:
                 self.mouse_pos = event.pos
     
     def render_frame(self):
-        """渲染一帧"""
+        """渲染一帧 - 优化版本"""
         # 清空屏幕
         self.screen.fill(self.background_color)
         
-        # 绘制背景图案
-        self.draw_background_patterns()
+        # 绘制背景图案 - 已移除以提高性能
+        # self.draw_background_patterns()  # Disabled for performance
         
         # 应用全局效果
         self.apply_global_effects()
         
-        # 绘制所有几何实体
+        # 绘制所有几何实体 - 优化循环
+        width, height = self.width, self.height  # Cache dimensions
+        global_scale = self.global_scale  # Cache global scale
+        
         for entity in self.geometric_entities:
             # 更新位置
             self.update_entity_position(entity)
             
-            # 计算屏幕坐标
-            screen_x = entity['x'] * self.width
-            screen_y = entity['y'] * self.height
+            # 计算屏幕坐标 - 优化计算
+            screen_x = entity['x'] * width
+            screen_y = entity['y'] * height
             
-            # 计算动态大小
-            base_size = entity['size'] * 30 * self.global_scale
-            dynamic_size = base_size * entity['scale_factor']
+            # 计算动态大小 - 预计算
+            dynamic_size = entity['size'] * 30 * global_scale * entity['scale_factor']
             
-            # 根据形状绘制
-            if entity['shape'] == 'circle':
+            # 根据形状绘制 - 优化分支
+            shape = entity['shape']
+            if shape == 'circle':
                 self.draw_circle(self.screen, entity, screen_x, screen_y, dynamic_size)
-            elif entity['shape'] == 'triangle':
+            elif shape == 'triangle':
                 self.draw_polygon(self.screen, entity, screen_x, screen_y, dynamic_size, 3)
-            elif entity['shape'] == 'square':
+            elif shape == 'square':
                 self.draw_polygon(self.screen, entity, screen_x, screen_y, dynamic_size, 4)
-            elif entity['shape'] == 'pentagon':
+            elif shape == 'pentagon':
                 self.draw_polygon(self.screen, entity, screen_x, screen_y, dynamic_size, 5)
-            elif entity['shape'] == 'hexagon':
+            elif shape == 'hexagon':
                 self.draw_polygon(self.screen, entity, screen_x, screen_y, dynamic_size, 6)
         
-        # 绘制鼠标影响区域指示器
-        self.draw_mouse_influence_indicator()
+        # 绘制鼠标影响区域指示器 - 仅在需要时绘制
+        if self.mouse_pos[0] > 0 and self.mouse_pos[1] > 0 and self.current_fps > 30:
+            self.draw_mouse_influence_indicator()
         
         # 绘制数据提示框
         if self.data_tooltip['visible']:
@@ -795,9 +878,11 @@ class GeometricArtEngine:
         pygame.display.flip()
     
     def draw_mouse_influence_indicator(self):
-        """绘制鼠标影响区域指示器"""
-        if self.mouse_pos[0] > 0 and self.mouse_pos[1] > 0:
-            # 绘制半透明的影响区域圆圈
+        """绘制鼠标影响区域指示器 - 优化版本"""
+        # Cache the influence surface to avoid recreating every frame
+        cache_key = "mouse_influence_indicator"
+        if cache_key not in self.surface_cache:
+            # Create cached influence surface
             influence_surface = pygame.Surface((self.mouse_influence_radius * 2, self.mouse_influence_radius * 2), pygame.SRCALPHA)
             pygame.draw.circle(influence_surface, (100, 100, 255, 30), 
                              (self.mouse_influence_radius, self.mouse_influence_radius), 
@@ -805,10 +890,13 @@ class GeometricArtEngine:
             pygame.draw.circle(influence_surface, (100, 100, 255, 80), 
                              (self.mouse_influence_radius, self.mouse_influence_radius), 
                              self.mouse_influence_radius, 2)
-            
-            self.screen.blit(influence_surface, 
-                           (self.mouse_pos[0] - self.mouse_influence_radius, 
-                            self.mouse_pos[1] - self.mouse_influence_radius))
+            self.surface_cache[cache_key] = influence_surface
+        
+        # Use cached surface
+        influence_surface = self.surface_cache[cache_key]
+        self.screen.blit(influence_surface, 
+                       (self.mouse_pos[0] - self.mouse_influence_radius, 
+                        self.mouse_pos[1] - self.mouse_influence_radius))
     
     def draw_data_tooltip(self):
         """绘制数据对话框"""
@@ -1044,6 +1132,34 @@ class GeometricArtEngine:
                 self.current_fps = self.fps_counter * 1000 / self.fps_timer
                 self.fps_counter = 0
                 self.fps_timer = 0
+                
+                # Periodic cache cleanup to prevent memory bloat
+                self.cache_frame += 1
+                if self.cache_frame % 300 == 0:  # Every 5 seconds at 60fps
+                    self.cleanup_caches()
+    
+    def cleanup_caches(self):
+        """Periodic cache cleanup to prevent memory issues"""
+        # Clear older cache entries periodically
+        if len(self.surface_cache) > 150:
+            keys_to_remove = list(self.surface_cache.keys())[:75]
+            for key in keys_to_remove:
+                del self.surface_cache[key]
+        
+        if len(self.color_cache) > 500:
+            keys_to_remove = list(self.color_cache.keys())[:250]
+            for key in keys_to_remove:
+                del self.color_cache[key]
+                
+        if len(self.math_cache) > 300:
+            keys_to_remove = list(self.math_cache.keys())[:150]
+            for key in keys_to_remove:
+                del self.math_cache[key]
+                
+        if len(self.blur_cache) > 100:
+            keys_to_remove = list(self.blur_cache.keys())[:50]
+            for key in keys_to_remove:
+                del self.blur_cache[key]
         
         pygame.quit()
         print("👋 Geometric Art Generator Closed")
